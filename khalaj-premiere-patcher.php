@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Finalizer
  * Description: Minimal one-time Premiere pipeline type patch for Khalaj Core.
- * Version: 1.2.3
+ * Version: 1.2.4
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
@@ -239,6 +239,57 @@ add_action('rest_api_init', static function (): void {
             } catch (Throwable $e) {
                 return new WP_Error('khj_reflection_failed', $e->getMessage(), ['status' => 500]);
             }
+        },
+    ]);
+});
+
+
+add_action('rest_api_init', static function (): void {
+    register_rest_route('khj-premiere-debug/v1', '/search-plugin-source', [
+        'methods' => WP_REST_Server::READABLE,
+        'permission_callback' => static fn(): bool => current_user_can('manage_options'),
+        'args' => [
+            'needle' => ['required' => true, 'type' => 'string'],
+        ],
+        'callback' => static function (WP_REST_Request $request) {
+            $needle = (string) $request->get_param('needle');
+            if ($needle === '' || strlen($needle) > 180) {
+                return new WP_Error('khj_bad_needle', 'Invalid needle.', ['status' => 400]);
+            }
+            $roots = [
+                WP_PLUGIN_DIR . '/khalaj-core---2',
+                WP_PLUGIN_DIR . '/khalaj-gravity-openai',
+            ];
+            $hits = [];
+            foreach ($roots as $root) {
+                if (!is_dir($root)) continue;
+                $it = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
+                );
+                foreach ($it as $file) {
+                    if (!$file->isFile() || strtolower($file->getExtension()) !== 'php') continue;
+                    $path = $file->getPathname();
+                    if (!is_readable($path)) continue;
+                    $lines = file($path, FILE_IGNORE_NEW_LINES);
+                    if (!is_array($lines)) continue;
+                    foreach ($lines as $idx => $line) {
+                        if (mb_stripos($line, $needle) === false) continue;
+                        $start = max(0, $idx - 10);
+                        $end = min(count($lines) - 1, $idx + 18);
+                        $parts = [];
+                        for ($n = $start; $n <= $end; $n++) {
+                            $parts[] = ($n + 1) . "\t" . $lines[$n];
+                        }
+                        $hits[] = [
+                            'file' => str_replace(ABSPATH, '[ABSPATH]/', $path),
+                            'line' => $idx + 1,
+                            'context' => implode("\n", $parts),
+                        ];
+                        if (count($hits) >= 20) break 3;
+                    }
+                }
+            }
+            return rest_ensure_response(['ok'=>true,'needle'=>$needle,'hits'=>$hits]);
         },
     ]);
 });
