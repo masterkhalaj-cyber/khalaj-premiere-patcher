@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Finalizer
  * Description: One-time final integration patch for Premiere in Khalaj Core.
- * Version: 1.0.0
+ * Version: 1.1.0
  */
 defined('ABSPATH') || exit;
 
@@ -94,7 +94,72 @@ PHP;
           ["        \$sections=['General'=>'General','Footage'=>'Footage Subcategories','Graphics'=>'Graphics Subcategories'];","        \$sections=['General'=>'General','Footage'=>'Footage Subcategories','Graphics'=>'Graphics Subcategories','Premiere'=>'Premiere Pro Subcategories'];",'naming_section'],
           ["        \$profile_labels=['after_effects'=>'After Effects','footage'=>'Footage','mockup'=>'Mockup','graphics'=>'Graphics'];","        \$profile_labels=['after_effects'=>'After Effects','footage'=>'Footage','mockup'=>'Mockup','graphics'=>'Graphics','premiere'=>'Premiere Pro'];",'settings_label']
         ];
+        $adminMethods=<<<'PHP'
+
+    public static function ensure_premiere_ui_contract(): void {
+        $contract=[
+            'version'=>1,
+            'roots'=>['en'=>16467,'fa'=>16468,'ar'=>16469],
+            'single_templates'=>['en'=>62478,'fa'=>62480,'ar'=>62481],
+            'source_templates'=>['en'=>162,'fa'=>4904,'ar'=>4920],
+        ];
+        if(get_option('khalaj_core_premiere_ui_contract_v1',[])!==$contract){
+            update_option('khalaj_core_premiere_ui_contract_v1',$contract,false);
+        }
+    }
+PHP;
+        $a=[
+          ["        add_action('wp_ajax_khalaj_core_imports_feed',[self::class,'ajax_imports_feed']);","        add_action('wp_ajax_khalaj_core_imports_feed',[self::class,'ajax_imports_feed']);\n        add_action('init',[self::class,'ensure_premiere_ui_contract'],60);",'ui_contract_hook'],
+          ["    public static function menu(): void {",$adminMethods."\n    public static function menu(): void {",'ui_contract_method'],
+          ["        \$sections=['General'=>'General','Footage'=>'Footage Subcategories','Graphics'=>'Graphics Subcategories'];","        \$sections=['General'=>'General','Footage'=>'Footage Subcategories','Graphics'=>'Graphics Subcategories','Premiere'=>'Premiere Pro Subcategories'];",'naming_section'],
+          ["        \$profile_labels=['after_effects'=>'After Effects','footage'=>'Footage','mockup'=>'Mockup','graphics'=>'Graphics'];","        \$profile_labels=['after_effects'=>'After Effects','footage'=>'Footage','mockup'=>'Mockup','graphics'=>'Graphics','premiere'=>'Premiere Pro'];",'settings_label']
+        ];
         khj_pf_apply($base,'includes/class-khalaj-core-admin.php',$a,$bakdir,$done);
+
+        $qOld=<<<'PHP'
+ private static function type($id,$fallback=''){
+  $t=sanitize_key((string)get_post_meta($id,'_khalaj_product_type',true));if($t!=='')return $t;
+  if($fallback!=='')return sanitize_key($fallback);
+  $f=mb_strtolower((string)get_post_meta($id,'_khalaj_ai_category_family',true),'UTF-8');
+  if(strpos($f,'premiere')!==false)return 'premiere_project';
+   if(strpos($f,'after')!==false)return 'after_effects_project';
+  if(strpos($f,'footage')!==false||strpos($f,'video')!==false)return 'video_footage';
+  if(strpos($f,'mockup')!==false)return 'psd_mockup';
+  if(strpos($f,'graphic')!==false)return 'graphics_asset';
+  return '';
+ }
+PHP;
+        $qNew=<<<'PHP'
+ private static function type($id,$fallback=''){
+  $valid=['after_effects_project','premiere_project','video_footage','psd_mockup','graphics_asset'];
+  $t=sanitize_key((string)get_post_meta($id,'_khalaj_product_type',true));if(in_array($t,$valid,true))return $t;
+  $fallback=sanitize_key((string)$fallback);if(in_array($fallback,$valid,true))return $fallback;
+  $entry=(int)get_post_meta($id,'_khalaj_generation_entry_id',true);if(!$entry)$entry=(int)get_post_meta($id,'_khalaj_media_entry_id',true);
+  if($entry>0){
+   $target=function_exists('gform_get_meta')?sanitize_key((string)gform_get_meta($entry,'khalaj_ai_target_product_type')):'';
+   if(in_array($target,$valid,true))return $target;
+   global $wpdb;$table=$wpdb->prefix.'khalaj_content_pipeline';
+   $pipeline=sanitize_key((string)$wpdb->get_var($wpdb->prepare("SELECT product_type FROM {$table} WHERE entry_id=%d LIMIT 1",$entry)));
+   if(in_array($pipeline,$valid,true))return $pipeline;
+  }
+  $f=mb_strtolower((string)get_post_meta($id,'_khalaj_ai_category_family',true),'UTF-8');
+  if(strpos($f,'premiere')!==false)return 'premiere_project';
+  if(strpos($f,'after')!==false)return 'after_effects_project';
+  if(strpos($f,'footage')!==false||strpos($f,'video')!==false)return 'video_footage';
+  if(strpos($f,'mockup')!==false)return 'psd_mockup';
+  if(strpos($f,'graphic')!==false)return 'graphics_asset';
+  return '';
+ }
+PHP;
+        $q=[[$qOld,$qNew,'quality_type_entry_fallback']];
+        khj_pf_apply($base,'includes/class-khalaj-core-quality-gate.php',$q,$bakdir,$done);
+
+        update_option('khalaj_core_premiere_ui_contract_v1',[
+            'version'=>1,
+            'roots'=>['en'=>16467,'fa'=>16468,'ar'=>16469],
+            'single_templates'=>['en'=>62478,'fa'=>62480,'ar'=>62481],
+            'source_templates'=>['en'=>162,'fa'=>4904,'ar'=>4920],
+        ],false);
 
         $report=['ok'=>true,'rolled_back'=>false,'error'=>'','files'=>array_map(fn($x)=>basename($x['path']),$done),'backup_dir'=>$bakdir,'completed_at'=>gmdate('c')];
         update_option('khj_premiere_finalizer_report',$report,false);
