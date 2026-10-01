@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Core Patcher
  * Description: One-time staged patch for Premiere Pro first-class support in Khalaj Core.
- * Version: 0.3.0
+ * Version: 0.4.0
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
@@ -627,6 +627,8 @@ add_action('rest_api_init', function(){
         'tags'=>'includes/class-khalaj-core-tags.php',
         'fixed_taxonomy'=>'engine/ai-product-generator/includes/class-khalaj-ai-fixed-taxonomy.php',
         'category_selector'=>'engine/ai-product-generator/includes/class-khalaj-ai-category-selector.php',
+        'engine_main'=>'engine/ai-product-generator/khalaj-ai-product-generator.php',
+        'legacy_compat'=>'includes/class-khalaj-core-legacy-compat.php',
     ];
 
     register_rest_route('khj-premiere-patcher/v1','/inspect-one',[
