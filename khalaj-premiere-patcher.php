@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Core Patcher
  * Description: One-time staged patch for Premiere Pro first-class support in Khalaj Core.
- * Version: 0.1.2
+ * Version: 0.2.0
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
@@ -514,3 +514,108 @@ NEW;
     }
 }
 register_activation_hook(__FILE__,'khj_pp_activate');
+
+
+/**
+ * Stage B inspector + restricted tags patch.
+ * Read-only inspector never exposes secrets; it returns only small snippets around known family/taxonomy markers.
+ */
+add_action('rest_api_init', function(){
+    register_rest_route('khj-premiere-patcher/v1','/inspect',[
+        'methods'=>'GET',
+        'permission_callback'=>function(){ return current_user_can('manage_options'); },
+        'callback'=>function(){
+            $base=WP_PLUGIN_DIR.'/khalaj-core---2/';
+            $targets=[
+                'tags'=>'includes/class-khalaj-core-tags.php',
+                'fixed_taxonomy'=>'engine/ai-product-generator/includes/class-khalaj-ai-fixed-taxonomy.php',
+            ];
+            $out=['ok'=>true,'targets'=>[]];
+            foreach($targets as $key=>$rel){
+                $path=$base.$rel;
+                $row=['exists'=>is_file($path),'relative_path'=>$rel];
+                if(!is_file($path)){ $out['targets'][$key]=$row; continue; }
+                $src=(string)file_get_contents($path);
+                $row['size']=strlen($src);
+                $row['sha256']=hash('sha256',$src);
+                $needles=$key==='tags'
+                    ? ['after_effects_project','psd_mockup','graphics_asset','video_footage','Video Footage','video-footage','family-scope-status']
+                    : ['normalize_product_type','after_effects_project','video_footage','graphics_asset','psd_mockup','premiere_project'];
+                $snips=[];
+                foreach($needles as $needle){
+                    $offset=0;$count=0;
+                    while(($pos=strpos($src,$needle,$offset))!==false && $count<8){
+                        $start=max(0,$pos-500);
+                        $text=substr($src,$start,1300);
+                        // Defensive redaction of obvious credential-like assignments.
+                        $text=preg_replace('/(?i)(token|secret|password|api[_-]?key)\s*([=:>]+)\s*([\'\"])[^\'\"]+\3/u','$1$2$3[redacted]$3',$text);
+                        $snips[]=['needle'=>$needle,'offset'=>$pos,'text'=>$text];
+                        $offset=$pos+strlen($needle);$count++;
+                    }
+                }
+                $row['snippets']=$snips;
+                $out['targets'][$key]=$row;
+            }
+            return new WP_REST_Response($out,200);
+        }
+    ]);
+
+    register_rest_route('khj-premiere-patcher/v1','/stage-b-tags',[
+        'methods'=>'POST',
+        'permission_callback'=>function(){ return current_user_can('manage_options'); },
+        'callback'=>function(){
+            $rel='includes/class-khalaj-core-tags.php';
+            $path=WP_PLUGIN_DIR.'/khalaj-core---2/'.$rel;
+            $report=['ok'=>false,'stage'=>'premiere_tags_stage_b','relative_path'=>$rel,'changed'=>false,'error'=>''];
+            try{
+                if(!is_file($path)||!is_readable($path)||!is_writable($path)) throw new RuntimeException('tags_file_not_writable');
+                $src=(string)file_get_contents($path);
+                if(strpos($src,"'premiere_project'")!==false || strpos($src,'"premiere_project"')!==false){
+                    $report['ok']=true;$report['already']=true;$report['new_sha256']=hash('sha256',$src);
+                    update_option('khj_premiere_stage_b_tags_report',$report,false);
+                    return new WP_REST_Response($report,200);
+                }
+
+                $patterns=[
+                    // Canonical family map: video_footage => ['label'=>'Video Footage','slug'=>'video-footage']
+                    '/(?P<indent>^[ \t]*)[\'\"]video_footage[\'\"]\s*=>\s*\[\s*[\'\"]label[\'\"]\s*=>\s*[\'\"]Video Footage[\'\"]\s*,\s*[\'\"]slug[\'\"]\s*=>\s*[\'\"]video-footage[\'\"]\s*\]\s*,?/m',
+                    // Alternate key order inside the family row.
+                    '/(?P<indent>^[ \t]*)[\'\"]video_footage[\'\"]\s*=>\s*\[\s*[\'\"]slug[\'\"]\s*=>\s*[\'\"]video-footage[\'\"]\s*,\s*[\'\"]label[\'\"]\s*=>\s*[\'\"]Video Footage[\'\"]\s*\]\s*,?/m',
+                ];
+                $matched=null;$matchText='';
+                foreach($patterns as $p){
+                    $n=preg_match_all($p,$src,$m);
+                    if($n===1){$matched=$p;$matchText=$m[0][0];break;}
+                    if($n>1) throw new RuntimeException('video_footage_family_anchor_multiple');
+                }
+                if($matched===null) throw new RuntimeException('video_footage_family_anchor_missing');
+
+                preg_match('/^[ \t]*/',$matchText,$im);
+                $indent=$im[0]??'';
+                $insertion=$matchText."\n".$indent."'premiere_project'=>['label'=>'Premiere Pro','slug'=>'premiere-pro'],";
+                $next=str_replace($matchText,$insertion,$src,$cnt);
+                if($cnt!==1) throw new RuntimeException('tags_replace_count_'.$cnt);
+                khj_pp_syntax_ok($next,$rel);
+
+                $backup=rtrim(sys_get_temp_dir(),'/\\').'/khj-core-tags-pre-premiere-'.gmdate('YmdHis').'.php';
+                if(!@copy($path,$backup)) throw new RuntimeException('tags_backup_failed');
+                $tmp=$path.'.khj-premiere-stage-b.tmp';
+                if(@file_put_contents($tmp,$next,LOCK_EX)===false) throw new RuntimeException('tags_temp_write_failed');
+                @chmod($tmp,fileperms($path)&0777);
+                if(!@rename($tmp,$path)){@unlink($tmp);throw new RuntimeException('tags_atomic_promote_failed');}
+
+                $report['ok']=true;
+                $report['changed']=true;
+                $report['backup']=$backup;
+                $report['old_sha256']=hash('sha256',$src);
+                $report['new_sha256']=hash('sha256',$next);
+                update_option('khj_premiere_stage_b_tags_report',$report,false);
+                return new WP_REST_Response($report,200);
+            }catch(Throwable $e){
+                $report['error']=$e->getMessage();
+                update_option('khj_premiere_stage_b_tags_report',$report,false);
+                return new WP_REST_Response($report,409);
+            }
+        }
+    ]);
+});
