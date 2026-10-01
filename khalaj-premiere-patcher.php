@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Core Patcher
  * Description: One-time staged patch for Premiere Pro first-class support in Khalaj Core.
- * Version: 0.1.0
+ * Version: 0.1.1
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
@@ -83,6 +83,21 @@ function khj_pp_activate(): void {
 
         $patches = [];
 
+        $quality_old = <<<'OLD'
+   if(strpos($f,'after')!==false)return 'after_effects_project';
+OLD;
+        $quality_new = <<<'NEW'
+   if(strpos($f,'premiere')!==false)return 'premiere_project';
+   if(strpos($f,'after')!==false)return 'after_effects_project';
+NEW;
+        $patches['includes/class-khalaj-core-quality-gate.php'] = [
+            [
+                'label'=>'family_guess',
+                'old'=>$quality_old,
+                'new'=>$quality_new,
+            ],
+        ];
+
         $patches['includes/class-khalaj-core-gravity-contract.php'] = [
             [
                 'label'=>'type_label',
@@ -119,14 +134,6 @@ function khj_pp_activate(): void {
                 'label'=>'fa_video_family',
                 'old'=>"if (!in_array(\$ptype, ['after_effects_project','video_footage'], true))",
                 'new'=>"if (!in_array(\$ptype, ['after_effects_project','premiere_project','video_footage'], true))",
-            ],
-        ];
-
-        $patches['includes/class-khalaj-core-quality-gate.php'] = [
-            [
-                'label'=>'family_guess',
-                'old'=>"   if(strpos(\$f,'after')!==false)return 'after_effects_project';",
-                'new'=>"   if(strpos(\$f,'premiere')!==false)return 'premiere_project';\n   if(strpos(\$f,'after')!==false)return 'after_effects_project';",
             ],
         ];
 
