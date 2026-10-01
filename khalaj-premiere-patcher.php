@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Finalizer
  * Description: Minimal one-time Premiere pipeline type patch for Khalaj Core.
- * Version: 1.2.2
+ * Version: 1.2.3
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
@@ -195,6 +195,50 @@ add_action('rest_api_init', static function (): void {
                 'route' => $route,
                 'callbacks' => $result,
             ]);
+        },
+    ]);
+});
+
+
+add_action('rest_api_init', static function (): void {
+    register_rest_route('khj-premiere-debug/v1', '/method-source', [
+        'methods' => WP_REST_Server::READABLE,
+        'permission_callback' => static fn(): bool => current_user_can('manage_options'),
+        'args' => [
+            'method' => ['required' => true, 'type' => 'string'],
+        ],
+        'callback' => static function (WP_REST_Request $request) {
+            $method = sanitize_key((string) $request->get_param('method'));
+            $allowed = ['manual_start','start_run','control_state','build_snapshot','settings'];
+            if (!in_array($method, $allowed, true) || !class_exists('Khalaj_Core_Runtime') || !method_exists('Khalaj_Core_Runtime', $method)) {
+                return new WP_Error('khj_method_not_allowed', 'Method not allowed or missing.', ['status' => 404]);
+            }
+            try {
+                $ref = new ReflectionMethod('Khalaj_Core_Runtime', $method);
+                $file = $ref->getFileName();
+                $start = (int) $ref->getStartLine();
+                $end = (int) $ref->getEndLine();
+                $source = '';
+                if ($file && is_readable($file)) {
+                    $lines = file($file, FILE_IGNORE_NEW_LINES);
+                    $parts = [];
+                    for ($n = max(1, $start - 8); $n <= min(count($lines), $end + 8); $n++) {
+                        $parts[] = $n . "\t" . $lines[$n - 1];
+                    }
+                    $source = implode("\n", $parts);
+                }
+                return rest_ensure_response([
+                    'ok' => true,
+                    'class' => 'Khalaj_Core_Runtime',
+                    'method' => $method,
+                    'file' => $file ? str_replace(ABSPATH, '[ABSPATH]/', $file) : '',
+                    'start_line' => $start,
+                    'end_line' => $end,
+                    'source' => $source,
+                ]);
+            } catch (Throwable $e) {
+                return new WP_Error('khj_reflection_failed', $e->getMessage(), ['status' => 500]);
+            }
         },
     ]);
 });
