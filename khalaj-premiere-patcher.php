@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Core Patcher
  * Description: One-time staged patch for Premiere Pro first-class support in Khalaj Core.
- * Version: 0.2.0
+ * Version: 0.3.0
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
@@ -616,6 +616,82 @@ add_action('rest_api_init', function(){
                 update_option('khj_premiere_stage_b_tags_report',$report,false);
                 return new WP_REST_Response($report,409);
             }
+        }
+    ]);
+});
+
+
+/* Stage B controlled inspector/editor for three approved Khalaj Core files only. */
+add_action('rest_api_init', function(){
+    $targets = [
+        'tags'=>'includes/class-khalaj-core-tags.php',
+        'fixed_taxonomy'=>'engine/ai-product-generator/includes/class-khalaj-ai-fixed-taxonomy.php',
+        'category_selector'=>'engine/ai-product-generator/includes/class-khalaj-ai-category-selector.php',
+    ];
+
+    register_rest_route('khj-premiere-patcher/v1','/inspect-one',[
+        'methods'=>'GET',
+        'permission_callback'=>function(){ return current_user_can('manage_options'); },
+        'callback'=>function(WP_REST_Request $r) use ($targets){
+            $key=sanitize_key((string)$r->get_param('target'));
+            $needle=(string)$r->get_param('needle');
+            if(!isset($targets[$key])) return new WP_REST_Response(['ok'=>false,'error'=>'invalid_target'],400);
+            if($needle===''||strlen($needle)>180) return new WP_REST_Response(['ok'=>false,'error'=>'invalid_needle'],400);
+            $path=WP_PLUGIN_DIR.'/khalaj-core---2/'.$targets[$key];
+            if(!is_file($path)) return new WP_REST_Response(['ok'=>false,'error'=>'missing_file'],404);
+            $src=(string)file_get_contents($path);
+            $before=max(100,min(2000,absint($r->get_param('before')?:700)));
+            $after=max(100,min(3000,absint($r->get_param('after')?:1300)));
+            $offset=0;$rows=[];$limit=20;
+            while(($pos=strpos($src,$needle,$offset))!==false && count($rows)<$limit){
+                $start=max(0,$pos-$before);
+                $text=substr($src,$start,$before+strlen($needle)+$after);
+                $text=preg_replace('/(?i)(token|secret|password|api[_-]?key)\s*([=:>]+)\s*([\'\"])[^\'\"]+\3/u','$1$2$3[redacted]$3',$text);
+                $rows[]=['offset'=>$pos,'text'=>$text];
+                $offset=$pos+strlen($needle);
+            }
+            return new WP_REST_Response([
+                'ok'=>true,'target'=>$key,'relative_path'=>$targets[$key],
+                'size'=>strlen($src),'sha256'=>hash('sha256',$src),
+                'needle'=>$needle,'matches'=>$rows,'match_count'=>count($rows)
+            ],200);
+        }
+    ]);
+
+    register_rest_route('khj-premiere-patcher/v1','/surgical-patch',[
+        'methods'=>'POST',
+        'permission_callback'=>function(){ return current_user_can('manage_options'); },
+        'callback'=>function(WP_REST_Request $r) use ($targets){
+            $key=sanitize_key((string)$r->get_param('target'));
+            $old=(string)$r->get_param('old');
+            $new=(string)$r->get_param('new');
+            $expected=strtolower(trim((string)$r->get_param('expected_sha256')));
+            $label=sanitize_key((string)($r->get_param('label')?:'stage_b_patch'));
+            if(!isset($targets[$key])) return new WP_REST_Response(['ok'=>false,'error'=>'invalid_target'],400);
+            if($old===''||strlen($old)>20000||strlen($new)>30000) return new WP_REST_Response(['ok'=>false,'error'=>'invalid_payload'],400);
+            if(!preg_match('/^[a-f0-9]{64}$/',$expected)) return new WP_REST_Response(['ok'=>false,'error'=>'expected_sha_required'],400);
+            $path=WP_PLUGIN_DIR.'/khalaj-core---2/'.$targets[$key];
+            if(!is_file($path)||!is_readable($path)||!is_writable($path)) return new WP_REST_Response(['ok'=>false,'error'=>'file_not_writable'],409);
+            $src=(string)file_get_contents($path);
+            $actual=hash('sha256',$src);
+            if(!hash_equals($expected,$actual)) return new WP_REST_Response(['ok'=>false,'error'=>'sha_mismatch','actual_sha256'=>$actual],409);
+            $count=substr_count($src,$old);
+            if($count!==1) return new WP_REST_Response(['ok'=>false,'error'=>'anchor_count','count'=>$count],409);
+            $next=str_replace($old,$new,$src);
+            try{ token_get_all($next,TOKEN_PARSE); }
+            catch(ParseError $e){ return new WP_REST_Response(['ok'=>false,'error'=>'syntax_error','message'=>$e->getMessage()],409); }
+
+            $backup=rtrim(sys_get_temp_dir(),'/\\').'/khj-premiere-'.sanitize_file_name($key.'-'.$label.'-'.gmdate('YmdHis')).'.php';
+            if(!@copy($path,$backup)) return new WP_REST_Response(['ok'=>false,'error'=>'backup_failed'],500);
+            $tmp=$path.'.khj-premiere-stage-b.tmp';
+            if(@file_put_contents($tmp,$next,LOCK_EX)===false) return new WP_REST_Response(['ok'=>false,'error'=>'temp_write_failed','backup'=>$backup],500);
+            @chmod($tmp,fileperms($path)&0777);
+            if(!@rename($tmp,$path)){@unlink($tmp);return new WP_REST_Response(['ok'=>false,'error'=>'atomic_promote_failed','backup'=>$backup],500);}
+            return new WP_REST_Response([
+                'ok'=>true,'target'=>$key,'label'=>$label,'backup'=>$backup,
+                'old_sha256'=>$actual,'new_sha256'=>hash('sha256',$next),
+                'bytes'=>strlen($next)
+            ],200);
         }
     ]);
 });
