@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Finalizer
  * Description: Minimal one-time Premiere pipeline type patch for Khalaj Core.
- * Version: 1.2.1
+ * Version: 1.2.2
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
@@ -107,3 +107,94 @@ function khj_pf121_activate(): void {
 }
 
 register_activation_hook(__FILE__, 'khj_pf121_activate');
+
+
+/**
+ * Temporary administrator-only diagnostic used during Premiere QA.
+ * It exposes only the PHP source of the registered callback for a requested REST route.
+ */
+add_action('rest_api_init', static function (): void {
+    register_rest_route('khj-premiere-debug/v1', '/route-source', [
+        'methods' => WP_REST_Server::READABLE,
+        'permission_callback' => static function (): bool {
+            return current_user_can('manage_options');
+        },
+        'args' => [
+            'route' => [
+                'required' => true,
+                'type' => 'string',
+            ],
+        ],
+        'callback' => static function (WP_REST_Request $request) {
+            $route = '/' . ltrim((string) $request->get_param('route'), '/');
+            $routes = rest_get_server()->get_routes();
+            if (!isset($routes[$route])) {
+                return new WP_Error('khj_route_not_found', 'Route not found.', ['status' => 404]);
+            }
+
+            $allowed = [
+                '/khalaj-core/v1/runtime/manual/start',
+                '/khalaj-core-control/v1/admin/command',
+            ];
+            if (!in_array($route, $allowed, true)) {
+                return new WP_Error('khj_route_not_allowed', 'Route not allowed.', ['status' => 403]);
+            }
+
+            $result = [];
+            foreach ((array) $routes[$route] as $endpoint) {
+                if (empty($endpoint['callback']) || !is_callable($endpoint['callback'])) {
+                    continue;
+                }
+                $callback = $endpoint['callback'];
+                try {
+                    if (is_array($callback) && count($callback) === 2) {
+                        $ref = new ReflectionMethod($callback[0], (string) $callback[1]);
+                        $callback_name = (is_object($callback[0]) ? get_class($callback[0]) : (string) $callback[0]) . '::' . (string) $callback[1];
+                    } elseif (is_string($callback)) {
+                        $ref = new ReflectionFunction($callback);
+                        $callback_name = $callback;
+                    } elseif ($callback instanceof Closure) {
+                        $ref = new ReflectionFunction($callback);
+                        $callback_name = 'Closure';
+                    } elseif (is_object($callback) && method_exists($callback, '__invoke')) {
+                        $ref = new ReflectionMethod($callback, '__invoke');
+                        $callback_name = get_class($callback) . '::__invoke';
+                    } else {
+                        continue;
+                    }
+
+                    $file = $ref->getFileName();
+                    $start = (int) $ref->getStartLine();
+                    $end = (int) $ref->getEndLine();
+                    $source = '';
+                    if ($file && is_readable($file) && $start > 0 && $end >= $start) {
+                        $lines = file($file, FILE_IGNORE_NEW_LINES);
+                        $slice_start = max(1, $start - 12);
+                        $slice_end = min(count($lines), $end + 12);
+                        $parts = [];
+                        for ($line_no = $slice_start; $line_no <= $slice_end; $line_no++) {
+                            $parts[] = $line_no . "\t" . $lines[$line_no - 1];
+                        }
+                        $source = implode("\n", $parts);
+                    }
+
+                    $result[] = [
+                        'callback' => $callback_name,
+                        'file' => $file ? str_replace(ABSPATH, '[ABSPATH]/', $file) : '',
+                        'start_line' => $start,
+                        'end_line' => $end,
+                        'source' => $source,
+                    ];
+                } catch (Throwable $e) {
+                    $result[] = ['error' => $e->getMessage()];
+                }
+            }
+
+            return rest_ensure_response([
+                'ok' => true,
+                'route' => $route,
+                'callbacks' => $result,
+            ]);
+        },
+    ]);
+});
