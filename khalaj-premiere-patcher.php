@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Khalaj Premiere Core Patcher
  * Description: One-time staged patch for Premiere Pro first-class support in Khalaj Core.
- * Version: 0.1.1
+ * Version: 0.1.2
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
@@ -83,13 +83,8 @@ function khj_pp_activate(): void {
 
         $patches = [];
 
-        $quality_old = <<<'OLD'
-   if(strpos($f,'after')!==false)return 'after_effects_project';
-OLD;
-        $quality_new = <<<'NEW'
-   if(strpos($f,'premiere')!==false)return 'premiere_project';
-   if(strpos($f,'after')!==false)return 'after_effects_project';
-NEW;
+        $quality_old = "if(strpos(\$f,'after')!==false)return 'after_effects_project';";
+        $quality_new = "if(strpos(\$f,'premiere')!==false)return 'premiere_project';\n   if(strpos(\$f,'after')!==false)return 'after_effects_project';";
         $patches['includes/class-khalaj-core-quality-gate.php'] = [
             [
                 'label'=>'family_guess',
