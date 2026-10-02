@@ -1,267 +1,206 @@
 <?php
 /**
- * Plugin Name: Khalaj Premiere Unified Naming Fix
- * Description: Guarded one-time patch for Premiere unified naming resolver + read-only probe.
- * Version: 1.3.4
+ * Plugin Name: Khalaj Premiere Content/Software Fix
+ * Description: Guarded one-time patch for Premiere software label, unified content workflow and text integrity.
+ * Version: 2.0.0
  * Author: Khalaj.Net
  */
 defined('ABSPATH') || exit;
 
-function khj_pun134_function_span(string $src,string $name): array {
-    $needle='function '.$name.'(';
-    $start=strpos($src,$needle);
-    if($start===false) throw new RuntimeException($name.':function_missing');
-    $brace=strpos($src,'{',$start);
-    if($brace===false) throw new RuntimeException($name.':brace_missing');
-    $depth=0;$len=strlen($src);$inS=false;$inD=false;$esc=false;
-    for($i=$brace;$i<$len;$i++){
-        $ch=$src[$i];
-        if($esc){$esc=false;continue;}
-        if($ch==='\\'){$esc=true;continue;}
-        if(!$inD&&$ch==="'"){$inS=!$inS;continue;}
-        if(!$inS&&$ch==='"'){$inD=!$inD;continue;}
-        if($inS||$inD)continue;
-        if($ch==='{')$depth++;
-        elseif($ch==='}'){
-            $depth--;
-            if($depth===0)return [$start,$i+1,substr($src,$start,$i-$start+1)];
-        }
-    }
-    throw new RuntimeException($name.':function_end_missing');
+function khj_pct200_replace_once(string $src,string $old,string $new,string $label): string {
+    $count=substr_count($src,$old);
+    if($count!==1) throw new RuntimeException($label.':anchor_count='.$count);
+    return str_replace($old,$new,$src);
+}
+function khj_pct200_php_parse(string $src,string $label): void {
+    try{ token_get_all($src,TOKEN_PARSE); }
+    catch(ParseError $e){ throw new RuntimeException($label.':syntax:'.$e->getMessage()); }
+}
+function khj_pct200_atomic(string $path,string $content): void {
+    $tmp=$path.'.khj-pct200.tmp';
+    if(@file_put_contents($tmp,$content,LOCK_EX)===false) throw new RuntimeException('write_failed:'.$path);
+    @chmod($tmp,fileperms($path)&0777);
+    if(!@rename($tmp,$path)){ @unlink($tmp); throw new RuntimeException('rename_failed:'.$path); }
+    $written=(string)@file_get_contents($path);
+    if(hash('sha256',$written)!==hash('sha256',$content)) throw new RuntimeException('hash_mismatch:'.$path);
 }
 
-function khj_pun134_patch_function(string $src,string $name,array $repls): string {
-    [$start,$end,$fn]=khj_pun134_function_span($src,$name);
-    $next=$fn;
-    foreach($repls as $r){
-        [$old,$new,$expected,$label]=$r;
-        $count=substr_count($next,$old);
-        if($count!==$expected)throw new RuntimeException($name.':'.$label.':anchor_count='.$count.':expected='.$expected);
-        $next=str_replace($old,$new,$next);
-    }
-    if($next===$fn)throw new RuntimeException($name.':no_change');
-    return substr($src,0,$start).$next.substr($src,$end);
-}
-
-function khj_pun134_activate(): void {
-    $path=WP_PLUGIN_DIR.'/khalaj-core---2/includes/class-khalaj-core-content-ai-seo.php';
-    $report=['ok'=>false,'rolled_back'=>false,'changed'=>false,'error'=>'','at'=>gmdate('c')];
-    $backup='';
+function khj_pct200_activate(): void {
+    $root=WP_PLUGIN_DIR.'/khalaj-core---2';
+    $gen=$root.'/engine/ai-product-generator/khalaj-ai-product-generator.php';
+    $core=$root.'/includes/class-khalaj-core-content-ai-seo.php';
+    $report=['ok'=>false,'rolled_back'=>false,'error'=>'','at'=>gmdate('c'),'checks'=>[]];
+    $backupDir='';
     try{
-        if(!is_file($path)||!is_readable($path)||!is_writable($path))throw new RuntimeException('content_ai_seo:not_writable');
-        $src=(string)file_get_contents($path);
-        $next=$src;
-
-        $next=khj_pun134_patch_function($next,'khj_un_name_clean_subject',[
-            [
-                <<<'OLD'
-$remove=['Graphic Asset','After Effects','Photoshop','PSD','Mockup','Mockups','Stock Footage','Footage'];
-OLD,
-                <<<'NEW'
-$remove=['Graphic Asset','After Effects','Premiere Pro Template','Premiere Pro','Premiere','Photoshop','PSD','Mockup','Mockups','Stock Footage','Footage'];
-NEW,
-                1,'en_remove'
-            ],
-            [
-                <<<'OLD'
-        if($type==='after_effects_project'){
-            $s=preg_replace('/\b(?:after\s+effects?|ae|project\s+template|project|template)\b/i',' ',$s);
-        } elseif($type==='video_footage'){
-OLD,
-                <<<'NEW'
-        if($type==='after_effects_project'){
-            $s=preg_replace('/\b(?:after\s+effects?|ae|project\s+template|project|template)\b/i',' ',$s);
-        } elseif($type==='premiere_project'){
-            $s=preg_replace('/\b(?:premiere\s+pro\s+template|premiere\s+pro|premiere|project\s+template|project|template)\b/i',' ',$s);
-        } elseif($type==='video_footage'){
-NEW,
-                1,'en_branch'
-            ],
-            [
-                <<<'OLD'
-$remove=['پروژه افتر افکت','افتر افکت','موکاپ','فتوشاپ','فوتیج','فایل گرافیکی','قالب آماده','PSD'];
-OLD,
-                <<<'NEW'
-$remove=['پروژه افتر افکت','افتر افکت','پروژه آماده پریمیر','پریمیر پرو','پریمیر','موکاپ','فتوشاپ','فوتیج','فایل گرافیکی','قالب آماده','PSD'];
-NEW,
-                1,'fa_remove'
-            ],
-            [
-                <<<'OLD'
-        if($type==='after_effects_project'){
-            $s=preg_replace('/(?<!\pL)(?:پروژه\s+آماده\s+افتر\s*افکت|پروژه\s+افتر\s*افکت|پروژه\s+آماده|پروژه|قالب\s+آماده|قالب|تمپلیت)(?!\pL)/u',' ',$s);
-        } elseif($type==='video_footage'){
-OLD,
-                <<<'NEW'
-        if($type==='after_effects_project'){
-            $s=preg_replace('/(?<!\pL)(?:پروژه\s+آماده\s+افتر\s*افکت|پروژه\s+افتر\s*افکت|پروژه\s+آماده|پروژه|قالب\s+آماده|قالب|تمپلیت)(?!\pL)/u',' ',$s);
-        } elseif($type==='premiere_project'){
-            $s=preg_replace('/(?<!\pL)(?:پروژه\s+آماده\s+پریمیر(?:\s+پرو)?|پریمیر(?:\s+پرو)?|پروژه\s+آماده|پروژه|قالب\s+آماده|قالب|تمپلیت)(?!\pL)/u',' ',$s);
-        } elseif($type==='video_footage'){
-NEW,
-                1,'fa_branch'
-            ],
-            [
-                <<<'OLD'
-$remove=['قالب أفتر إفكت','أفتر إفكت','موك أب','موكاب','فوتوشوب','فوتيج','ملف جرافيك','PSD'];
-OLD,
-                <<<'NEW'
-$remove=['قالب أفتر إفكت','أفتر إفكت','قالب بريمير برو','قالب بريمير','بريمير برو','بريمير','موك أب','موكاب','فوتوشوب','فوتيج','ملف جرافيك','PSD'];
-NEW,
-                1,'ar_remove'
-            ],
-            [
-                <<<'OLD'
-        if($type==='after_effects_project'){
-            $s=preg_replace('/(?<!\pL)(?:مشروع\s+أفتر\s*إفكت|قالب\s+أفتر\s*إفكت|مشروع|قالب)(?!\pL)/u',' ',$s);
-        } elseif($type==='video_footage'){
-OLD,
-                <<<'NEW'
-        if($type==='after_effects_project'){
-            $s=preg_replace('/(?<!\pL)(?:مشروع\s+أفتر\s*إفكت|قالب\s+أفتر\s*إفكت|مشروع|قالب)(?!\pL)/u',' ',$s);
-        } elseif($type==='premiere_project'){
-            $s=preg_replace('/(?<!\pL)(?:قالب\s+بريمير(?:\s+برو)?|بريمير(?:\s+برو)?|مشروع|قالب)(?!\pL)/u',' ',$s);
-        } elseif($type==='video_footage'){
-NEW,
-                1,'ar_branch'
-            ],
-        ]);
-
-        $next=khj_pun134_patch_function($next,'khj_un_name_subject_valid',[
-            [
-                <<<'OLD'
-        if($type==='after_effects_project' && preg_match('/\b(?:after\s+effects?|ae|project|template)\b/i',$s)) return false;
-        if($type==='video_footage'
-OLD,
-                <<<'NEW'
-        if($type==='after_effects_project' && preg_match('/\b(?:after\s+effects?|ae|project|template)\b/i',$s)) return false;
-        if($type==='premiere_project' && preg_match('/\b(?:premiere\s+pro|premiere|project|template)\b/i',$s)) return false;
-        if($type==='video_footage'
-NEW,
-                1,'en_guard'
-            ],
-            [
-                <<<'OLD'
-        if($type==='after_effects_project' && preg_match('/(?<!\pL)(?:پروژه|قالب|تمپلیت|افتر\s*افکت)(?!\pL)/u',$s)) return false;
-        if($type==='video_footage'
-OLD,
-                <<<'NEW'
-        if($type==='after_effects_project' && preg_match('/(?<!\pL)(?:پروژه|قالب|تمپلیت|افتر\s*افکت)(?!\pL)/u',$s)) return false;
-        if($type==='premiere_project' && preg_match('/(?<!\pL)(?:پریمیر(?:\s+پرو)?|پروژه|قالب|تمپلیت)(?!\pL)/u',$s)) return false;
-        if($type==='video_footage'
-NEW,
-                1,'fa_guard'
-            ],
-            [
-                <<<'OLD'
-        if($type==='after_effects_project' && preg_match('/(?<!\pL)(?:مشروع|قالب|أفتر\s*إفكت)(?!\pL)/u',$s)) return false;
-        if($type==='video_footage'
-OLD,
-                <<<'NEW'
-        if($type==='after_effects_project' && preg_match('/(?<!\pL)(?:مشروع|قالب|أفتر\s*إفكت)(?!\pL)/u',$s)) return false;
-        if($type==='premiere_project' && preg_match('/(?<!\pL)(?:بريمير(?:\s+برو)?|مشروع|قالب)(?!\pL)/u',$s)) return false;
-        if($type==='video_footage'
-NEW,
-                1,'ar_guard'
-            ],
-        ]);
-
-        $next=khj_pun134_patch_function($next,'khj_un_name_build',[
-            [
-                <<<'OLD'
-    if($type==='video_footage'){
-OLD,
-                <<<'NEW'
-    if($type==='premiere_project'){
-        if($lang==='fa') return khj_un_name_norm('پروژه آماده پریمیر '.$subject);
-        if($lang==='ar') return khj_un_name_norm('قالب بريمير برو '.$subject);
-        return khj_un_name_norm($subject.' Premiere Pro Template');
-    }
-    if($type==='video_footage'){
-NEW,
-                1,'premiere_fallback'
-            ],
-        ]);
-
-        $next=khj_pun134_patch_function($next,'khj_un_name_title_valid',[
-            [
-                <<<'OLD'
-    } elseif($type==='video_footage'){
-OLD,
-                <<<'NEW'
-    } elseif($type==='premiere_project'){
-        if($lang==='en'){
-            if(substr_count(strtolower($title),'premiere pro template')!==1) return false;
-            $subject=preg_replace('/\s+Premiere Pro Template$/i','',$title);
-            if(preg_match('/\b(?:premiere\s+pro|premiere|project|template)\b/i',$subject)) return false;
-        } elseif($lang==='fa'){
-            if(mb_substr_count($title,'پروژه آماده پریمیر')!==1 || !preg_match('/^پروژه آماده پریمیر\s+\S/u',$title)) return false;
-            $subject=preg_replace('/^پروژه آماده پریمیر\s+/u','',$title);
-            if(preg_match('/(?<!\pL)(?:پریمیر(?:\s+پرو)?|پروژه|قالب|تمپلیت)(?!\pL)/u',$subject)) return false;
-        } else {
-            if(mb_substr_count($title,'قالب بريمير برو')!==1 || !preg_match('/^قالب بريمير برو\s+\S/u',$title)) return false;
-            $subject=preg_replace('/^قالب بريمير برو\s+/u','',$title);
-            if(preg_match('/(?<!\pL)(?:بريمير(?:\s+برو)?|مشروع|قالب)(?!\pL)/u',$subject)) return false;
+        foreach([$gen,$core] as $f){
+            if(!is_file($f)||!is_readable($f)||!is_writable($f)) throw new RuntimeException('not_writable:'.$f);
         }
-    } elseif($type==='video_footage'){
-NEW,
-                1,'premiere_fallback'
-            ],
-        ]);
+        $gen0=(string)file_get_contents($gen);
+        $core0=(string)file_get_contents($core);
+        $report['gen_old_sha256']=hash('sha256',$gen0);
+        $report['core_old_sha256']=hash('sha256',$core0);
 
-        try{ token_get_all($next,TOKEN_PARSE); }catch(ParseError $e){throw new RuntimeException('syntax:'.$e->getMessage());}
+        $backupDir=rtrim(sys_get_temp_dir(),'/\\').'/khj-premiere-content-200-'.gmdate('YmdHis');
+        if(!@mkdir($backupDir,0700,true)&&!is_dir($backupDir)) throw new RuntimeException('backup_dir_failed');
+        if(!@copy($gen,$backupDir.'/khalaj-ai-product-generator.php')) throw new RuntimeException('backup_gen_failed');
+        if(!@copy($core,$backupDir.'/class-khalaj-core-content-ai-seo.php')) throw new RuntimeException('backup_core_failed');
+        $report['backup_dir']=$backupDir;
 
-        $bakdir=rtrim(sys_get_temp_dir(),'/\\').'/khj-premiere-naming-v134-'.gmdate('YmdHis');
-        if(!@mkdir($bakdir,0700,true)&&!is_dir($bakdir))throw new RuntimeException('backup_dir_failed');
-        $backup=$bakdir.'/class-khalaj-core-content-ai-seo.php';
-        if(!@copy($path,$backup))throw new RuntimeException('backup_failed');
+        $g=$gen0;
+        $c=$core0;
 
-        $tmp=$path.'.khj-v134.tmp';
-        if(@file_put_contents($tmp,$next,LOCK_EX)===false)throw new RuntimeException('temp_write_failed');
-        @chmod($tmp,fileperms($path)&0777);
-        if(!@rename($tmp,$path)){@unlink($tmp);throw new RuntimeException('promote_failed');}
-        $written=(string)file_get_contents($path);
-        if(hash('sha256',$written)!==hash('sha256',$next))throw new RuntimeException('post_write_hash_mismatch');
+        $g=khj_pct200_replace_once(
+            $g,
+            "'generation_job' => ['entry_id' => (int) \$entry_id, 'pipeline' => '40.86.2-graphics-semantic-brief'],",
+            "'generation_job' => ['entry_id' => (int) \$entry_id, 'pipeline' => '40.86.3-unified-semantic-brief'],",
+            'pipeline_label'
+        );
 
-        $report=[
-            'ok'=>true,'rolled_back'=>false,'changed'=>true,'error'=>'',
-            'old_sha256'=>hash('sha256',$src),'new_sha256'=>hash('sha256',$next),
-            'backup'=>$backup,'at'=>gmdate('c'),
-            'checks'=>[
-                'clean_en'=>strpos($written,"'Premiere Pro Template','Premiere Pro','Premiere'")!==false,
-                'clean_fa'=>strpos($written,"'پروژه آماده پریمیر','پریمیر پرو','پریمیر'")!==false,
-                'clean_ar'=>strpos($written,"'قالب بريمير برو'")!==false,
-                'subject_valid_premiere'=>substr_count($written,"type==='premiere_project'")>=6,
-                'build_fallback'=>strpos($written,"return khj_un_name_norm(\$subject.' Premiere Pro Template');")!==false,
-                'title_valid_fallback'=>strpos($written,"substr_count(strtolower(\$title),'premiere pro template')!==1")!==false,
-            ],
+        $promptAnchor="'forced_product_type_from_form' => \$forced_product_type,";
+        $promptInsert=$promptAnchor."\n".
+            "        'product_type_pipeline_rule' => 'premiere_project MUST use this exact same product_brief, four-paragraph long-description, short-description, localization, SEO and integrity workflow as after_effects_project. Premiere Pro is never a fallback or reduced-content path.',\n".
+            "        'premiere_title_contract' => 'For premiere_project only: English title = SUBJECT + Premiere Pro Template; Persian title = پروژه آماده پریمیر + SUBJECT; Arabic title = قالب بريمير برو + SUBJECT. Keep the real subject specific and evidence-grounded.',";
+        $g=khj_pct200_replace_once($g,$promptAnchor,$promptInsert,'prompt_contract');
+
+        $g=khj_pct200_replace_once(
+            $g,
+            "'Editing Software' => \$editing ?: \$data['editing'],",
+            "'Editing Software' => ((\$data['product_type'] ?? '') === 'premiere_project' ? 'Pr-Pro' : (\$editing ?: \$data['editing'])),",
+            'custom_field_software'
+        );
+        $g=khj_pct200_replace_once(
+            $g,
+            "update_post_meta(\$post_id, 'Editing Software', \$editing ?: (\$data['editing'] ?? 'After Effects'));",
+            "update_post_meta(\$post_id, 'Editing Software', ((\$data['product_type'] ?? '') === 'premiere_project' ? 'Pr-Pro' : (\$editing ?: (\$data['editing'] ?? 'After Effects'))));",
+            'product_meta_software'
+        );
+
+        $c=khj_pct200_replace_once(
+            $c,
+            "    if(\$type==='after_effects_project') return 'AE';\n    if(\$type==='psd_mockup') return 'PS';",
+            "    if(\$type==='after_effects_project') return 'AE';\n    if(\$type==='premiere_project') return 'Pr-Pro';\n    if(\$type==='psd_mockup') return 'PS';",
+            'evidence_software'
+        );
+
+        $partsAnchor="        }\n        \$parts[\$i]=\$part;";
+        $partsInsert=<<<'PHP'
+        }
+        // v1.1.0: catch glued starts that can survive AI/HTML normalization.
+        if($lang==='fa'){
+            $part=preg_replace('/(?<=[\x{0600}-\x{06FF}])(?=این\s+(?:کیت|مجموعه|پروژه|موکاپ|فوتیج|محصول|قالب|فایل)\b)/u',' ',$part);
+        } elseif($lang==='ar'){
+            $part=preg_replace('/(?<=[\x{0600}-\x{06FF}])(?=(?:تقدم|تتضمن|تتميز|توفر|تشمل|يقدم|يتيح)\s+(?:هذه|هذا)\b)/u',' ',$part);
+        }
+        $parts[$i]=$part;
+PHP;
+        $c=khj_pct200_replace_once($c,$partsAnchor,$partsInsert,'glued_boundary');
+
+        $applyAnchor="    \$old=(string)get_post_field('post_content',\$id); \$new=khj_ti_html_v1(\$old,\$title,\$lang);\n    if(\$new!==\$old) wp_update_post(['ID'=>\$id,'post_content'=>\$new]);";
+        $applyInsert="    \$old=(string)get_post_field('post_content',\$id); \$new=khj_ti_html_v1(\$old,\$title,\$lang);\n".
+            "    \$old_excerpt=(string)get_post_field('post_excerpt',\$id); \$new_excerpt=khj_ti_html_v1(\$old_excerpt,\$title,\$lang);\n".
+            "    if(\$new!==\$old || \$new_excerpt!==\$old_excerpt) wp_update_post(['ID'=>\$id,'post_content'=>\$new,'post_excerpt'=>\$new_excerpt]);";
+        $c=khj_pct200_replace_once($c,$applyAnchor,$applyInsert,'excerpt_apply');
+
+        $c=khj_pct200_replace_once(
+            $c,
+            "    \$r=khj_ti_reasons_v1(\$new,\$lang);",
+            "    \$r=khj_ti_reasons_v1(\$new.' '.\$new_excerpt,\$lang);",
+            'excerpt_reasons'
+        );
+
+        $filterAnchor="    if(isset(\$data['post_content'])) \$data['post_content']=khj_ti_html_v1((string)\$data['post_content'],(string)(\$data['post_title']??''),\$lang);";
+        $filterInsert=$filterAnchor."\n".
+            "    if(isset(\$data['post_excerpt'])) \$data['post_excerpt']=khj_ti_html_v1((string)\$data['post_excerpt'],(string)(\$data['post_title']??''),\$lang);";
+        $c=khj_pct200_replace_once($c,$filterAnchor,$filterInsert,'excerpt_insert_filter');
+
+        khj_pct200_php_parse($g,'generator');
+        khj_pct200_php_parse($c,'content_core');
+
+        khj_pct200_atomic($gen,$g);
+        khj_pct200_atomic($core,$c);
+
+        $report['gen_new_sha256']=hash('sha256',$g);
+        $report['core_new_sha256']=hash('sha256',$c);
+        $report['checks']=[
+            'unified_pipeline'=>strpos($g,'40.86.3-unified-semantic-brief')!==false,
+            'premiere_prompt'=>strpos($g,'premiere_project MUST use this exact same product_brief')!==false,
+            'generator_pr_pro'=>strpos($g,"=== 'premiere_project' ? 'Pr-Pro'")!==false,
+            'evidence_pr_pro'=>strpos($c,"if(\$type==='premiere_project') return 'Pr-Pro';")!==false,
+            'excerpt_integrity'=>strpos($c,"\$new_excerpt=khj_ti_html_v1")!==false,
+            'fa_kit_boundary'=>strpos($c,'(?:کیت|مجموعه|پروژه|موکاپ|فوتیج|محصول|قالب|فایل)')!==false,
+            'arabic_boundary'=>strpos($c,'(?:تقدم|تتضمن|تتميز|توفر|تشمل|يقدم|يتيح)')!==false,
         ];
-        update_option('khj_premiere_naming_fix_v134',$report,false);
+        foreach($report['checks'] as $k=>$v){ if(!$v) throw new RuntimeException('check_failed:'.$k); }
+        $report['ok']=true;
+        update_option('khj_premiere_content_fix_v200',$report,false);
     }catch(Throwable $e){
-        if($backup&&is_file($backup)){@copy($backup,$path);$report['rolled_back']=true;}
-        $report['error']=$e->getMessage();$report['at']=gmdate('c');
-        update_option('khj_premiere_naming_fix_v134',$report,false);
+        $report['error']=$e->getMessage();
+        if($backupDir&&is_file($backupDir.'/khalaj-ai-product-generator.php')&&is_file($backupDir.'/class-khalaj-core-content-ai-seo.php')){
+            @copy($backupDir.'/khalaj-ai-product-generator.php',$gen);
+            @copy($backupDir.'/class-khalaj-core-content-ai-seo.php',$core);
+            $report['rolled_back']=true;
+        }
+        update_option('khj_premiere_content_fix_v200',$report,false);
     }
 }
-register_activation_hook(__FILE__,'khj_pun134_activate');
+register_activation_hook(__FILE__,'khj_pct200_activate');
 
 add_action('rest_api_init',static function(){
-    register_rest_route('khj-premiere-fix/v1','/probe-4445',[
+    register_rest_route('khj-premiere-fix/v2','/backfill',[
+        'methods'=>'POST',
+        'permission_callback'=>static function(){return current_user_can('manage_options');},
+        'callback'=>static function(){
+            $ids=get_posts([
+                'post_type'=>'product','post_status'=>'publish','fields'=>'ids','posts_per_page'=>-1,
+                'meta_key'=>'_khalaj_product_type','meta_value'=>'premiere_project',
+                'orderby'=>'ID','order'=>'ASC','suppress_filters'=>true,
+            ]);
+            $out=['ok'=>true,'count'=>count($ids),'updated'=>[],'holds'=>[]];
+            foreach($ids as $id){
+                $id=(int)$id;
+                update_post_meta($id,'Editing Software','Pr-Pro');
+                if(function_exists('khj_ti_apply_v1')) khj_ti_apply_v1($id);
+                $lang=function_exists('khj_ti_lang_v1')?khj_ti_lang_v1($id):'en';
+                if(function_exists('khalaj_ai_v40_85_11_sync_title_seo')){
+                    khalaj_ai_v40_85_11_sync_title_seo($id,(string)get_the_title($id),$lang);
+                }
+                $hold=(string)get_post_meta($id,'_khalaj_text_integrity_hold',true);
+                if($hold!=='') $out['holds'][(string)$id]=$hold;
+                $out['updated'][]=[
+                    'id'=>$id,
+                    'lang'=>$lang,
+                    'software'=>(string)get_post_meta($id,'Editing Software',true),
+                    'status'=>(string)get_post_status($id),
+                ];
+            }
+            return rest_ensure_response($out);
+        },
+    ]);
+    register_rest_route('khj-premiere-fix/v2','/probe',[
         'methods'=>'GET',
         'permission_callback'=>static function(){return current_user_can('manage_options');},
         'callback'=>static function(){
-            $bundle=get_option('khj_unified_subject_bundle_4445',[]);
-            $out=['ok'=>true,'entry_id'=>4445,'langs'=>[]];
-            foreach(['en','fa','ar'] as $lang){
-                $raw=(string)($bundle['subjects'][$lang]??'');
-                $clean=function_exists('khj_un_name_clean_subject')?khj_un_name_clean_subject($raw,$lang,'premiere_project','graphic'):'';
-                $subject_ok=function_exists('khj_un_name_subject_valid')?khj_un_name_subject_valid($clean,$lang,'premiere_project','graphic'):false;
-                $title=class_exists('Khalaj_Core_Product_Naming')?Khalaj_Core_Product_Naming::compose_title($clean,$lang,'premiere_project','graphic',0,4445):'';
-                $title_ok=class_exists('Khalaj_Core_Product_Naming')?Khalaj_Core_Product_Naming::validate_title($title,$lang,'premiere_project','graphic',0,4445):false;
-                $out['langs'][$lang]=['raw'=>$raw,'clean'=>$clean,'subject_ok'=>$subject_ok,'title'=>$title,'title_ok'=>$title_ok];
-                if(!$subject_ok||!$title_ok||$title==='')$out['ok']=false;
+            $ids=[62540,62541,62542];
+            $rows=[];
+            foreach($ids as $id){
+                $content=(string)get_post_field('post_content',$id);
+                $excerpt=(string)get_post_field('post_excerpt',$id);
+                $rows[]=[
+                    'id'=>$id,
+                    'status'=>get_post_status($id),
+                    'software'=>(string)get_post_meta($id,'Editing Software',true),
+                    'content_glued_fa'=>strpos($content,'پخشاین')!==false,
+                    'excerpt_glued_fa'=>strpos($excerpt,'پخشاین')!==false,
+                    'excerpt_glued_en'=>strpos($excerpt,'ToolkitThis')!==false,
+                    'excerpt_glued_ar'=>strpos($excerpt,'المتحركةتقدم')!==false,
+                    'hold'=>(string)get_post_meta($id,'_khalaj_text_integrity_hold',true),
+                ];
             }
-            return rest_ensure_response($out);
+            return rest_ensure_response([
+                'ok'=>true,
+                'patch'=>get_option('khj_premiere_content_fix_v200',[]),
+                'rows'=>$rows,
+            ]);
         },
     ]);
 });
